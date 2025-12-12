@@ -1,0 +1,66 @@
+name: RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+
+    steps:
+
+      - name: Install Tailscale
+        run: |
+          Write-Output "Installing Tailscale..."
+          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "tailscale.exe"
+          Start-Process ".\tailscale.exe" "/S" -Wait
+
+      - name: Connect to Tailscale
+        run: |
+          Write-Output "Connecting to Tailscale..."
+
+          # MUST be single line or PowerShell throws error
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" --hostname="gh-runner-$env:GITHUB_RUN_ID"
+
+          # Wait for IP
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4).Trim()
+              if ($tsIP) { break }
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+
+          if (-not $tsIP) {
+              Write-Error "❌ Failed to obtain Tailscale IP"
+              exit 1
+          }
+
+          Write-Output "Tailscale IP assigned: $tsIP"
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Enable Remote Desktop (RDP)
+        run: |
+          Write-Output "Enabling RDP..."
+
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+
+          netsh advfirewall firewall add rule name="RDP" dir=in localport=3389 protocol=TCP action=allow
+
+          Write-Output "RDP Enabled!"
+
+      - name: Show Connection Info
+        run: |
+          Write-Output "===================================="
+          Write-Output "✔️  RDP IS READY!"
+          Write-Output "Use this IP in your RDP client:"
+          Write-Output "➡️  $env:TAILSCALE_IP"
+          Write-Output "Username: runneradmin"
+          Write-Output "Password: $env:RUNNER_TEMP_PASSWORD"
+          Write-Output "===================================="
+
+      - name: Keep session alive
+        run: |
+          Write-Output "Keeping machine alive for 6 hours..."
+          Start-Sleep -Seconds 21600  # 6 hours
